@@ -1,12 +1,51 @@
 # Egypt Used Cars Data Pipeline
 
-Automated data pipeline for scraping, cleaning, and preparing Egypt used-cars data from Hatla2ee.
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Apache Airflow](https://img.shields.io/badge/Apache%20Airflow-2.9.3-017CEE?style=for-the-badge&logo=apacheairflow&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
+![Selenium](https://img.shields.io/badge/Selenium-Chrome-43B02A?style=for-the-badge&logo=selenium&logoColor=white)
+![Power BI](https://img.shields.io/badge/Power%20BI-Dashboard-F2C811?style=for-the-badge&logo=powerbi&logoColor=black)
 
-## Airflow In Docker
+Automated data engineering pipeline for scraping, storing, cleaning, and analyzing Egypt used-car listings from Hatla2ee.
 
-This project includes a Dockerized Apache Airflow setup.
+The project is designed as a small production-style workflow: Selenium handles dynamic scraping, Airflow schedules the jobs, PostgreSQL stores raw and cleaned data, Python/pandas performs transformation, and Power BI connects to the final analytical table.
 
-### Project Structure
+## Project Overview
+
+```text
+Hatla2ee Website
+    |
+    | Selenium scraping
+    v
+Airflow scrape DAG
+    |
+    |--> used_car_price_reference
+    |--> raw_used_cars
+    |
+    v
+Airflow transform DAG
+    |
+    | Python + pandas cleaning
+    v
+cleaned_used_cars
+    |
+    v
+Power BI Dashboard
+```
+
+## Tech Stack
+
+| Layer | Tool | Purpose |
+|---|---|---|
+| Orchestration | Apache Airflow | Run scraping and transformation DAGs |
+| Runtime | Docker Compose | Run Airflow, Selenium, and PostgreSQL locally |
+| Scraping | Selenium + Chrome | Scrape dynamic listing pages and reference prices |
+| Storage | PostgreSQL 13 | Store raw, reference, and cleaned data |
+| Transformation | Python + pandas | Clean prices, mileage, year, location, and quality flags |
+| BI | Power BI | Build the final business dashboard |
+
+## Repository Structure
 
 ```text
 DEP/
@@ -20,183 +59,245 @@ DEP/
 |-- sql/
 |   `-- 001_create_cars_tables.sql
 |-- src/
+|   |-- db_utils.py
 |   |-- scrape_hatla2ee.py
 |   |-- scrape_used_price_reference.py
-|   |-- db_utils.py
 |   `-- transform_used_cars.py
 |-- docker-compose.yml
 |-- .env.example
-`-- .env
+`-- README.md
 ```
 
-### Start Airflow
+## Pipeline DAGs
+
+| DAG | Purpose | Schedule |
+|---|---|---|
+| `hatla2ee_scrape_used_cars_raw` | Scrapes reference prices and raw used-car listings | Daily |
+| `hatla2ee_transform_used_cars_cleaned` | Cleans raw data and loads the analytical table | Triggered by scrape DAG |
+
+Run order:
+
+1. `scrape_price_reference`
+2. `scrape_used_cars`
+3. `trigger_transform_used_cars`
+4. `transform_used_cars`
+
+## Database Tables
+
+| Table | Description |
+|---|---|
+| `raw_used_cars` | Raw scraped listing rows, stored mostly as text |
+| `used_car_price_reference` | Hatla2ee brand/model/year reference prices |
+| `cleaned_used_cars` | Cleaned analytical table used by Power BI |
+
+Important fields:
+
+| Field | Meaning |
+|---|---|
+| `car_hash` | Primary key generated from car attributes |
+| `batch_id` | Airflow run timestamp used to identify a scrape batch |
+| `loaded_at` | Raw table insert timestamp |
+| `created_at` | Cleaned table insert timestamp |
+| `price_was_imputed` | Whether the price was estimated during cleaning |
+| `price_imputation_level` | The imputation method: model, brand, or global average |
+
+Duplicate handling:
+
+```sql
+ON CONFLICT (car_hash) DO NOTHING
+```
+
+This prevents exact duplicate car records from being inserted again.
+
+## Cleaning Logic
+
+The transformation script cleans the raw scraped table into a Power BI-ready table.
+
+Main steps:
+
+| Column | Cleaning |
+|---|---|
+| `price` | Extract digits, convert to numeric, impute invalid prices |
+| `mileage` | Extract digits and convert to numeric |
+| `year` | Convert to integer |
+| `location` | Normalize text and split into city/governorate |
+| `brand` / `model` | Standardize text |
+| `car_hash` | Preserve unique analytical key |
+
+Price imputation levels:
+
+| Level | Meaning |
+|---|---|
+| `model_avg` | Filled using average price for the same model |
+| `brand_avg` | Filled using average price for the same brand |
+| `global_avg` | Filled using average valid price across all cars |
+| `null` | Original price was valid and not imputed |
+
+## Quick Start
+
+Copy the example environment file:
+
+```bash
+copy .env.example .env
+```
+
+Start the full stack:
 
 ```bash
 docker compose up -d
 ```
 
-Then open:
+Open Airflow:
 
 ```text
 http://localhost:8080
 ```
 
-Login:
+Default login:
 
 ```text
 username: airflow
 password: airflow
 ```
 
-### DAGs
-
-The project has two separate DAGs:
-
-```text
-hatla2ee_scrape_used_cars_raw
-hatla2ee_transform_used_cars_cleaned
-```
-
-Run order:
-
-1. Trigger `hatla2ee_scrape_used_cars_raw`
-2. The scrape DAG loads `used_car_price_reference`
-3. The scrape DAG loads `raw_used_cars`
-4. The scrape DAG triggers `hatla2ee_transform_used_cars_cleaned`
-5. The transform DAG loads `cleaned_used_cars`
-
-The full flow is:
-
-```text
-Selenium reference-price scraper
-    -> used_car_price_reference table
-Selenium listing scraper
-    -> raw_used_cars table
-    -> Python transformation
-    -> cleaned_used_cars table
-    -> Power BI
-```
-
-The DAGs are intentionally separate so scraping and transformation can be debugged independently.
-
-The scraper uses Selenium with a separate Chrome container:
-
-```text
-selenium/standalone-chrome
-```
-
-Airflow connects to it using:
-
-```text
-http://selenium:4444/wd/hub
-```
-
-You can view the browser session while the scraper is running at:
+View the Selenium browser session:
 
 ```text
 http://localhost:7900
 ```
 
-### Postgres Warehouse
+## Scraping Settings
 
-The project uses two Postgres containers:
+Edit `.env` before starting the containers.
 
-```text
-postgres        Airflow metadata database
-cars-postgres   warehouse database for car data
+```env
+HATLA2EE_MAX_PAGES=5
 ```
 
-Both services use `postgres:13` for version consistency.
+Recommended values:
 
-The warehouse database is:
+| Value | Usage |
+|---|---|
+| `5` | Quick testing |
+| `570` | Larger full-site scrape safety cap |
+| `0` | Auto mode, scrape until the first empty page |
 
-```text
-database: cars_dw
-user: cars_user
-password: cars_password
-container host: cars-postgres
-local host port: 5433
+Reference price scraper:
+
+```env
+HATLA2EE_PRICE_REFERENCE_MAX_BRANDS=0
 ```
 
-The warehouse tables are created automatically from:
+| Value | Usage |
+|---|---|
+| `0` | Scrape all reference-price brands |
+| `2` | Quick testing |
 
-```text
-sql/001_create_cars_tables.sql
-```
+## PostgreSQL Connection
 
-Tables:
+Power BI and database clients can connect using:
 
-```text
-raw_used_cars                appended raw scraped listing rows
-used_car_price_reference     Hatla2ee brand/model/year reference prices
-cleaned_used_cars            unique cleaned car records
-```
+| Setting | Value |
+|---|---|
+| Server | `localhost` |
+| Port | `5433` |
+| Database | `cars_dw` |
+| Username | `cars_user` |
+| Password | `cars_password` |
+| Main table | `cleaned_used_cars` |
 
-Key fields:
-
-```text
-car_hash   MD5 hash from car attributes, excluding scraping metadata
-batch_id   Airflow run timestamp
-loaded_at  raw load time
-created_at first clean insert time
-```
-
-If the same car record appears again with the same `car_hash`, Postgres skips it with `ON CONFLICT DO NOTHING`.
-
-### Outputs
-
-Raw scraped data is inserted into:
-
-```text
-raw_used_cars
-```
-
-Cleaned data is inserted into:
+Power BI target table:
 
 ```text
 cleaned_used_cars
 ```
 
-### Power BI
+## Useful Commands
 
-Connect Power BI to PostgreSQL:
+Check running containers:
 
-```text
-Server: localhost:5433
-Database: cars_dw
-Username: cars_user
-Password: cars_password
-Table: cleaned_used_cars
+```bash
+docker compose ps
 ```
 
-### Check Data In Postgres
-
-After the scrape DAG finishes:
+Check raw row count:
 
 ```bash
 docker compose exec cars-postgres psql -U cars_user -d cars_dw -c "SELECT COUNT(*) FROM raw_used_cars;"
 ```
 
-After the transform DAG finishes:
+Check cleaned row count:
 
 ```bash
 docker compose exec cars-postgres psql -U cars_user -d cars_dw -c "SELECT COUNT(*) FROM cleaned_used_cars;"
 ```
 
-### Scraping Settings
+Check rows by batch:
 
-You can edit `.env`:
-
-```text
-HATLA2EE_MAX_PAGES=5
+```bash
+docker compose exec cars-postgres psql -U cars_user -d cars_dw -c "SELECT batch_id, COUNT(*) FROM raw_used_cars GROUP BY batch_id ORDER BY batch_id DESC;"
 ```
 
-Use a small number like `5` for testing. Use a larger safety cap such as `570` for a fuller scrape.
+Export cleaned data to CSV:
 
-Reference price scraping can also be limited:
-
-```text
-HATLA2EE_PRICE_REFERENCE_MAX_BRANDS=0
+```bash
+docker compose exec -T cars-postgres psql -U cars_user -d cars_dw -c "COPY cleaned_used_cars TO STDOUT WITH CSV HEADER" > data/backups/cleaned_used_cars.csv
 ```
 
-Set it to `0` for all brands, or a small number like `2` for testing.
+Stop the stack:
+
+```bash
+docker compose down
+```
+
+Reset all Docker database volumes:
+
+```bash
+docker compose down -v
+```
+
+## Power BI Dashboard Ideas
+
+Recommended KPI cards:
+
+| KPI | Description |
+|---|---|
+| Total Listings | Count of cleaned cars |
+| Average Price | Average cleaned price |
+| Median Price | Better central price measure |
+| Average Mileage | Mileage level across selected cars |
+| Imputed Price % | Data quality indicator |
+| Unique Brands | Market coverage |
+
+Recommended visuals:
+
+| Visual | Purpose |
+|---|---|
+| Top brands by listings | Understand supply concentration |
+| Median price by brand | Compare brand price positioning |
+| Listings by governorate | Show geographic market spread |
+| Price bands | Segment market by affordability |
+| Price vs mileage | Understand depreciation patterns |
+| Listings by model year | Understand age distribution |
+| Imputation level chart | Show data quality transparently |
+
+## Project Status
+
+Completed:
+
+- Dockerized Airflow stack
+- Selenium scraper
+- Reference price scraper
+- PostgreSQL warehouse
+- Raw and cleaned tables
+- Hash-based duplicate prevention
+- Python transformation pipeline
+- Power BI-ready cleaned table
+- CSV export backup
+
+Next:
+
+- Build the Power BI dashboard
+- Add DAX measures
+- Add dashboard screenshots to this README
+- Optionally add a small data dictionary section
