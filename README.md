@@ -34,6 +34,15 @@ cleaned_used_cars
 Power BI Dashboard
 ```
 
+### What This Project Shows
+
+- End-to-end orchestration with separate scrape and transform DAGs
+- Selenium scraping against dynamic website pages
+- Raw-to-cleaned warehouse design in PostgreSQL
+- Idempotent loading with hash-based duplicate prevention
+- Price quality handling using reference prices, IQR outlier checks, and fallback averages
+- BI-ready output for Power BI or CSV export
+
 ## Tech Stack
 
 | Layer | Tool | Purpose |
@@ -95,6 +104,7 @@ Important fields:
 | Field | Meaning |
 |---|---|
 | `car_hash` | Primary key generated from car attributes |
+| `reference_hash` | Primary key for one reference-price brand/model/year |
 | `batch_id` | Airflow run timestamp used to identify a scrape batch |
 | `loaded_at` | Raw table insert timestamp |
 | `created_at` | Cleaned table insert timestamp |
@@ -128,10 +138,30 @@ Price imputation levels:
 
 | Level | Meaning |
 |---|---|
+| `reference_missing_price` | Missing or invalid scraped price filled from Hatla2ee reference average |
+| `reference_low_outlier` | Price was far below the reference range and replaced with reference average |
+| `reference_high_outlier` | Price was far above the reference range and replaced with reference average |
+| `iqr_model_year_median` | Group outlier replaced with median for same brand/model/year |
+| `iqr_model_median` | Group outlier replaced with median for same brand/model |
+| `iqr_brand_median` | Group outlier replaced with median for same brand |
+| `absolute_high_brand_median` | Extremely high price replaced with brand median |
+| `absolute_high_global_median` | Extremely high price replaced with global median |
 | `model_avg` | Filled using average price for the same model |
 | `brand_avg` | Filled using average price for the same brand |
 | `global_avg` | Filled using average valid price across all cars |
 | `null` | Original price was valid and not imputed |
+
+## Code Map
+
+| File | Responsibility |
+|---|---|
+| `src/scrape_hatla2ee.py` | Scrapes used-car listing pages and inserts raw rows page-by-page |
+| `src/scrape_used_price_reference.py` | Scrapes Hatla2ee used-price reference tables |
+| `src/transform_used_cars.py` | Cleans raw rows and loads `cleaned_used_cars` |
+| `src/db_utils.py` | Database connection and stable hash helpers |
+| `dags/hatla2ee_scrape_dag.py` | Runs reference scrape, listing scrape, then triggers transform DAG |
+| `dags/hatla2ee_transform_dag.py` | Runs the cleaning script, optionally for one batch |
+| `sql/001_create_cars_tables.sql` | Creates warehouse tables and indexes |
 
 ## Quick Start
 
@@ -181,6 +211,8 @@ Recommended values:
 | `5` | Quick testing |
 | `570` | Larger full-site scrape safety cap |
 | `0` | Auto mode, scrape until the first empty page |
+
+Note: a fixed page cap is recommended for full runs because some websites repeat the last page instead of returning a clean empty page.
 
 Reference price scraper:
 
@@ -244,6 +276,18 @@ Export cleaned data to CSV:
 docker compose exec -T cars-postgres psql -U cars_user -d cars_dw -c "COPY cleaned_used_cars TO STDOUT WITH CSV HEADER" > data/backups/cleaned_used_cars.csv
 ```
 
+Show price quality flags:
+
+```bash
+docker compose exec cars-postgres psql -U cars_user -d cars_dw -c "SELECT price_imputation_level, COUNT(*) FROM cleaned_used_cars GROUP BY price_imputation_level ORDER BY COUNT(*) DESC;"
+```
+
+Inspect the most expensive cleaned records:
+
+```bash
+docker compose exec cars-postgres psql -U cars_user -d cars_dw -c "SELECT car_name, year, price_original, price, price_imputation_level, car_url FROM cleaned_used_cars ORDER BY price DESC LIMIT 20;"
+```
+
 Stop the stack:
 
 ```bash
@@ -255,6 +299,178 @@ Reset all Docker database volumes:
 ```bash
 docker compose down -v
 ```
+
+## CI/CD Plan With Jenkins And Docker Hub
+
+The CI/CD goal is to package the Airflow project as a Docker image and push it to Docker Hub. This image should contain the project code needed by Airflow:
+
+```text
+dags/
+src/
+sql/
+Python dependencies
+```
+
+The image is for the Airflow project only. PostgreSQL, Selenium, and other services still run from their normal public Docker images.
+
+### Target Image
+
+Example Docker Hub image name:
+
+```text
+<dockerhub-username>/egypt-used-cars-airflow
+```
+
+Recommended tags:
+
+```text
+<dockerhub-username>/egypt-used-cars-airflow:<jenkins-build-number>
+<dockerhub-username>/egypt-used-cars-airflow:latest
+```
+
+### Jenkins Pipeline Flow
+
+The Jenkins pipeline should run these stages:
+
+| Stage | Purpose |
+|---|---|
+| Checkout | Pull the latest project code from GitHub |
+| Validate | Check Docker Compose and basic project structure |
+| Build Image | Build the custom Airflow Docker image |
+| Test Image | Run Python syntax checks for `src/` and `dags/` inside the image |
+| Docker Login | Login to Docker Hub using Jenkins credentials |
+| Push Image | Push both build-number and `latest` tags to Docker Hub |
+
+### Jenkins Credentials
+
+Create a Jenkins credential for Docker Hub:
+
+| Field | Value |
+|---|---|
+| Kind | Username with password |
+| ID | `dockerhub-creds` |
+| Username | Docker Hub username |
+| Password | Docker Hub access token |
+
+Use a Docker Hub access token instead of the account password.
+
+### Jenkins Parameters
+
+Recommended Jenkins job parameters:
+
+| Parameter | Example |
+|---|---|
+| `DOCKERHUB_NAMESPACE` | `your-dockerhub-username` |
+| `IMAGE_NAME` | `egypt-used-cars-airflow` |
+
+### Example Jenkinsfile Logic
+
+```groovy
+pipeline {
+    agent any
+
+    environment {
+        DOCKERHUB_CREDENTIALS_ID = 'dockerhub-creds'
+        IMAGE_NAME = "${params.DOCKERHUB_NAMESPACE}/egypt-used-cars-airflow"
+        IMAGE_TAG = "${IMAGE_NAME}:${env.BUILD_NUMBER}"
+        LATEST_TAG = "${IMAGE_NAME}:latest"
+    }
+
+    parameters {
+        string(name: 'DOCKERHUB_NAMESPACE', defaultValue: 'your-dockerhub-username')
+    }
+
+    stages {
+        stage('Validate') {
+            steps {
+                sh 'docker compose config --quiet'
+            }
+        }
+
+        stage('Build Image') {
+            steps {
+                sh 'docker build -f Dockerfile.airflow -t $IMAGE_TAG -t $LATEST_TAG .'
+            }
+        }
+
+        stage('Test Image') {
+            steps {
+                sh 'docker run --rm $IMAGE_TAG python -m py_compile /opt/airflow/src/*.py /opt/airflow/dags/*.py'
+            }
+        }
+
+        stage('Push To Docker Hub') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: DOCKERHUB_CREDENTIALS_ID, usernameVariable: 'DOCKERHUB_USER', passwordVariable: 'DOCKERHUB_TOKEN')]) {
+                    sh '''
+                        echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin
+                        docker push "$IMAGE_TAG"
+                        docker push "$LATEST_TAG"
+                        docker logout
+                    '''
+                }
+            }
+        }
+    }
+}
+```
+
+### Local Build Before Jenkins
+
+Before running Jenkins, test the image locally:
+
+```bash
+docker build -f Dockerfile.airflow -t egypt-used-cars-airflow:local .
+```
+
+Then run a syntax check inside the image:
+
+```bash
+docker run --rm egypt-used-cars-airflow:local python -m py_compile /opt/airflow/src/*.py /opt/airflow/dags/*.py
+```
+
+### Using The Pushed Image
+
+After Jenkins pushes the image, Docker Compose can use the Docker Hub image instead of building locally:
+
+```env
+AIRFLOW_IMAGE_NAME=<dockerhub-username>/egypt-used-cars-airflow:latest
+```
+
+Then restart the Airflow services:
+
+```bash
+docker compose up -d --force-recreate airflow-webserver airflow-scheduler
+```
+
+## GitHub Notes
+
+Do not commit local runtime state:
+
+- `.env`
+- `logs/`
+- `data/raw/debug/`
+- latest debug scrape CSV files
+- Docker volumes
+
+Commit useful project assets:
+
+- Source code in `src/`
+- DAGs in `dags/`
+- SQL schema in `sql/`
+- `.env.example`
+- README and dashboard screenshots
+- Small sample CSVs only if they are safe to share
+
+## Troubleshooting
+
+| Problem | What To Check |
+|---|---|
+| Airflow UI does not open | `docker compose ps` and `docker compose logs airflow-webserver` |
+| Scrape keeps going past expected pages | Set `HATLA2EE_MAX_PAGES` to a fixed cap such as `570` |
+| Raw table has rows but cleaned table is empty | Check `hatla2ee_transform_used_cars_cleaned` task logs |
+| Power BI cannot connect | Use server `localhost`, port `5433`, database `cars_dw` |
+| Website selectors break | Check debug HTML/screenshots in `data/raw/debug/` |
 
 ## Power BI Dashboard Ideas
 
