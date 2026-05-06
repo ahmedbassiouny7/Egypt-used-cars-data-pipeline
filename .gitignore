@@ -1,0 +1,11 @@
+logs/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.env
+data/raw/debug/
+data/raw/hatla2ee_used_cars_latest_debug.csv
+data/backups/*.csv
+data/processed/
+postgres-db-volume/
+cars-db-volume/
