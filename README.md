@@ -66,7 +66,8 @@ DEP/
 |   `-- backups/
 |-- logs/
 |-- powerbi/
-|   `-- EgyptUsedCars.pbix
+|   |-- EgyptUsedCars.pbix
+|   `-- dashboard-screenshot.png
 |-- sql/
 |   `-- 001_create_cars_tables.sql
 |-- src/
@@ -205,6 +206,10 @@ powerbi/EgyptUsedCars.pbix
 ```
 
 Power BI connects to PostgreSQL on `localhost:5433`, database `cars_dw`, using table `cleaned_used_cars`.
+
+## Dashboard Preview
+
+![Power BI dashboard preview](powerbi/dashboard-screenshot.png)
 
 ## Scraping Settings
 
@@ -527,9 +532,9 @@ Completed:
 - Python transformation pipeline
 - Power BI-ready cleaned table
 - Power BI dashboard file
+- Dashboard screenshot in README
 - CSV export backup
 
 Next:
 
-- Add dashboard screenshots to this README
 - Optionally add a small data dictionary section
