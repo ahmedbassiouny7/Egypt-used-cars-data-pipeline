@@ -65,6 +65,8 @@ DEP/
 |   |-- raw/
 |   `-- backups/
 |-- logs/
+|-- powerbi/
+|   `-- EgyptUsedCars.pbix
 |-- sql/
 |   `-- 001_create_cars_tables.sql
 |-- src/
@@ -195,6 +197,14 @@ View the Selenium browser session:
 ```text
 http://localhost:7900
 ```
+
+Open the included Power BI dashboard:
+
+```text
+powerbi/EgyptUsedCars.pbix
+```
+
+Power BI connects to PostgreSQL on `localhost:5433`, database `cars_dw`, using table `cleaned_used_cars`.
 
 ## Scraping Settings
 
@@ -464,6 +474,7 @@ Commit useful project assets:
 - Source code in `src/`
 - DAGs in `dags/`
 - SQL schema in `sql/`
+- Power BI dashboard in `powerbi/`
 - `.env.example`
 - README and dashboard screenshots
 - Small sample CSVs only if they are safe to share
@@ -515,11 +526,10 @@ Completed:
 - Hash-based duplicate prevention
 - Python transformation pipeline
 - Power BI-ready cleaned table
+- Power BI dashboard file
 - CSV export backup
 
 Next:
 
-- Build the Power BI dashboard
-- Add DAX measures
 - Add dashboard screenshots to this README
 - Optionally add a small data dictionary section

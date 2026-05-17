@@ -6,3 +6,4 @@
 *.env.example text eol=lf
 *.csv text eol=lf
 *.ipynb text eol=lf
+*.pbix binary
